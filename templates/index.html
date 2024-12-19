@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultrasonic Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #3B82F6;
+            --background-color: #F4F4F5;
+            --text-color: #27272A;
+            --card-background: white;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--background-color);
+            color: var(--text-color);
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+
+        .card {
+            background-color: var(--card-background);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 15px;
+            transition: transform 0.3s ease;
+            width: 100%;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .card:hover {
+            transform: translateY(-5px);
+        }
+
+        .card h2 {
+            text-align: center;
+        }
+
+        .chart-container {
+            height: 400px;
+            margin-top: 20px;
+            position: relative;
+            cursor: pointer;
+        }
+
+        .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+            margin-top: 20px;
+        }
+
+        .data-table th, .data-table td {
+            padding: 8px;
+            text-align: center; /* Align center */
+            overflow: hidden;
+            word-wrap: break-word;
+            white-space: normal;
+        }
+
+        .data-table th {
+            background-color: rgba(59, 130, 246, 0.05);
+            font-size: 0.9rem;
+            font-weight: bold;
+        }
+
+        .data-table td {
+            font-size: 0.9rem;
+        }
+
+        .data-table td.encrypted-data {
+            width: 200px; /* Lebar kolom Encrypted Data dibatasi */
+        }
+
+        .data-table td, .data-table th {
+            text-overflow: ellipsis; /* Menggunakan elipsis jika teks terlalu panjang */
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .badge-valid {
+            background-color: rgba(34, 197, 94, 0.1);
+            color: #22C55E;
+        }
+
+        .badge-invalid {
+            background-color: rgba(244, 63, 94, 0.1);
+            color: #F43F5E;
+        }
+
+        .header {
+            margin-bottom: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            color: var(--primary-color);
+            font-weight: 600;
+        }
+
+        /* Modal for enlarged chart */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-content {
+            position: relative;
+            background-color: #fff;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            max-width: 90%;
+            max-height: 90%;
+        }
+
+        .close-btn {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            color: #fff;
+            font-size: 1.5rem;
+            background-color: transparent;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Ultrasonic Sensor Dashboard</h1>
+        </div>
+        <div class="dashboard-grid">
+            <div class="card">
+                <h2>Recent Data</h2>
+                <table id="dataTable" class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Encrypted Data</th>
+                            <th>Timestamp</th>
+                            <th>Distance</th>
+                            <th>Hash Terkirim</th>
+                            <th>Hash Dihitung</th>
+                            <th>Valid Hash</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <!-- Data akan dimuat di sini -->
+                    </tbody>
+                </table>
+            </div>
+            <div class="card">
+                <h2>Distance Monitoring</h2>
+                <div class="chart-container" id="chartContainer" onclick="openModal()">
+                    <canvas id="distanceChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for enlarged chart -->
+    <div id="chartModal" class="modal">
+        <div class="modal-content">
+            <button class="close-btn" onclick="closeModal()">×</button>
+            <canvas id="modalChart" style="width: 100%; height: 100%;"></canvas>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+
+        // Inisialisasi grafik dengan Chart.js
+        const ctx = document.getElementById('distanceChart').getContext('2d');
+        const distanceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Timestamp
+                datasets: [{
+                    label: 'Distance (cm)',
+                    data: [],
+                    borderColor: 'rgba(75, 192, 192, 1)',
+                    backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                    fill: true,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Timestamp' }, grid: { display: false } },
+                    y: { title: { display: true, text: 'Distance (cm)' }, beginAtZero: true }
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                    },
+                    tooltip: {
+                        mode: 'index',
+                        intersect: false,
+                    },
+                    zoom: {
+                        pan: {
+                            enabled: true,
+                            mode: 'xy'
+                        },
+                        zoom: {
+                            enabled: true,
+                            mode: 'xy',
+                            speed: 0.1
+                        }
+                    }
+                }
+            }
+        });
+
+        // Fungsi untuk memperbarui tabel
+        function updateTable(data) {
+            const tableBody = document.querySelector('#dataTable tbody');
+            tableBody.innerHTML = ''; // Kosongkan tabel
+
+            // Ambil maksimal 10 data terakhir
+            const tableData = data.slice(-10).reverse(); // Ambil data terbaru dan urutkan dari atas ke bawah
+
+            tableData.forEach(item => {
+                const row = document.createElement('tr');
+                row.innerHTML = `
+                    <td class="encrypted-data">${item.encrypted_data}</td>
+                    <td>${item.timestamp}</td>
+                    <td>${item.distance}</td>
+                    <td>${item.received_hash}</td>
+                    <td>${item.calculated_hash}</td>
+                    <td>${item.valid_hash ? 'Valid' : 'Invalid'}</td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        // Fungsi untuk memperbarui grafik
+        function updateChart(data) {
+            const labels = data.map(item => item.timestamp);
+            const distances = data.map(item => item.distance);
+
+            distanceChart.data.labels = labels;
+            distanceChart.data.datasets[0].data = distances;
+            distanceChart.update();
+        }
+
+        // Fungsi untuk membuka modal dan menampilkan grafik yang lebih besar
+        function openModal() {
+            const modal = document.getElementById('chartModal');
+            const modalCtx = document.getElementById('modalChart').getContext('2d');
+
+            // Salin data chart ke modal chart
+            const modalChart = new Chart(modalCtx, {
+                type: 'line',
+                data: distanceChart.data,
+                options: {
+                    responsive: true,
+                    scales: distanceChart.options.scales,
+                    plugins: distanceChart.options.plugins
+                }
+            });
+
+            modal.style.display = 'flex';
+        }
+
+        // Fungsi untuk menutup modal
+        function closeModal() {
+            const modal = document.getElementById('chartModal');
+            modal.style.display = 'none';
+        }
+
+        // Terima data dari backend
+        socket.on('update_data', (payload) => {
+            const data = payload.last_25_data || [];
+            updateTable(data);
+            updateChart(data);
+        });
+    </script>
+</body>
+</html>
